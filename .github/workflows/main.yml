@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>未成年喫煙防止ゲーム</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  body { font-family: sans-serif; background:#f0f8ff; margin:0; padding:20px; text-align:center; }
+  #game { max-width:760px; margin:auto; background:#fff; padding:20px; border-radius:8px; box-shadow:0 0 12px rgba(0,0,0,0.12); }
+  .status-bar { margin:12px 0; text-align:left; font-size:16px; }
+  .bar { height:28px; background:#eee; border-radius:10px; overflow:hidden; }
+  .bar-fill { height:100%; width:50%; transition:width .3s; text-align:right; padding-right:10px; box-sizing:border-box; color:#fff; font-weight:bold; }
+  #emotion-bar { background:#ff6b6b; }
+  #friend-bar { background:#4dabf7; }
+  #senpai-bar { background:#9775fa; }
+  #society-bar { background:#51cf66; }
+  #story { font-size:18px; min-height:72px; margin:14px 0; white-space:pre-line; }
+  #choices { margin-top:10px; }
+  button.choice { margin:10px 6px; padding:14px 20px; border:none; border-radius:8px; background:#4caf50; color:white; cursor:pointer; font-size:16px; }
+  button.choice:hover { background:#3b9d3b; }
+  ul.log { text-align:left; display:inline-block; margin-top:12px; }
+  @media(max-width:520px){
+    button.choice{display:block; width:90%; margin:8px auto;}
+  }
+</style>
+</head>
+<body>
+  <div id="game">
+    <h1>🚭 未成年喫煙防止ゲーム</h1>
+    <div id="story">読み込み中…</div>
+
+    <h3>📊 ステータス</h3>
+    <div class="status-bar">感情値: <span id="emotion-text">50</span>
+      <div class="bar"><div id="emotion-bar" class="bar-fill" style="width:50%">50</div></div>
+    </div>
+    <div class="status-bar">友達との信頼: <span id="friend-text">50</span>
+      <div class="bar"><div id="friend-bar" class="bar-fill" style="width:50%">50</div></div>
+    </div>
+    <div class="status-bar">先輩との信頼: <span id="senpai-text">50</span>
+      <div class="bar"><div id="senpai-bar" class="bar-fill" style="width:50%">50</div></div>
+    </div>
+    <div class="status-bar">社会とのつながり: <span id="society-text">50</span>
+      <div class="bar"><div id="society-bar" class="bar-fill" style="width:50%">50</div></div>
+    </div>
+
+    <div id="choices"></div>
+  </div>
+
+<script>
+/*  */
+
+const player = {
+  score: 0,
+  emotion: 50,
+  trust: { friend: 50, senpai: 50, society: 50 }
+};
+
+let currentStory = null;   // 現在のシーン配列
+let currentScene = 0;      // インデックス
+let log = [];              // 選択ログ
+
+// ------- helper -------
+function clamp(n, a=0, b=100){ return Math.min(b, Math.max(a, n)); }
+
+// ------- ルート定義（それぞれ12シーン） -------
+// fields: text, trustTarget (or null), choices: [{text,effect,emotion,trust,correct}]
+const routes = {
+  school: [
+    { text: "🏫 朝、友達が『一回だけどう？』と言ってくる", trustTarget: "friend",
+      choices: [
+        { text: "笑って断る", effect: 0, emotion: -5, trust: -5, correct: true },
+        { text: "ちょっとだけ吸ってみる", effect: -1, emotion: 15, trust: 10, correct: false }
+      ]
+    },
+    { text: "放課後、屋上で先輩が誘ってくる「一服しない？」", trustTarget: "senpai",
+      choices: [
+        { text: "断る", effect: 2, emotion: 10, trust: -5, correct: true },
+        { text: "ついていく", effect: -2, emotion: 20, trust: 5, correct: false }
+      ]
+    },
+    { text: "昼休み、友達が吸っているのを見かける", trustTarget: "friend",
+      choices: [
+        { text: "注意する", effect: 1, emotion: -5, trust: 5, correct: true },
+        { text: "遠巻きに見る", effect: 0, emotion: 0, trust: 0, correct: true }
+      ]
+    },
+    { text: "部活の後、先輩から『今日もやるか？』と誘われる", trustTarget: "senpai",
+      choices: [
+        { text: "断る", effect: 2, emotion: 0, trust: -5, correct: true },
+        { text: "乗ってしまう", effect: -3, emotion: 15, trust: 5, correct: false }
+      ]
+    },
+    { text: "帰り道、コンビニ前で知らない大人に勧められる", trustTarget: "society",
+      choices: [
+        { text: "無視して通り過ぎる", effect: 2, emotion: 5, trust: 0, correct: true },
+        { text: "少し近づいてみる", effect: -2, emotion: 10, trust: -5, correct: false }
+      ]
+    },
+    { text: "友達のSNSに喫煙写真がアップされる", trustTarget: "friend",
+      choices: [
+        { text: "コメントしない", effect: 1, emotion: 0, trust: 2, correct: true },
+        { text: "面白がってリアクションする", effect: -1, emotion: 5, trust: -2, correct: false }
+      ]
+    },
+    { text: "文化祭準備で先輩達が休憩中に喫煙している", trustTarget: "senpai",
+      choices: [
+        { text: "注意はしないが離れる", effect: 1, emotion: 0, trust: 0, correct: true },
+        { text: "先輩に合わせる", effect: -2, emotion: 10, trust: 5, correct: false }
+      ]
+    },
+    { text: "放課後、友達と深刻な話になり気分が落ち込む", trustTarget: null,
+      choices: [
+        { text: "相談して気持ちを落ち着ける", effect: 1, emotion: -5, trust: 0, correct: true },
+        { text: "気晴らしに試す", effect: -2, emotion: 10, trust: -2, correct: false }
+      ]
+    },
+    { text: "家で親が喫煙しているのを見かける", trustTarget: "society",
+      choices: [
+        { text: "『体に悪いよ』と話す", effect: 2, emotion: 0, trust: 10, correct: true },
+        { text: "羨ましそうに見る", effect: -1, emotion: 5, trust: -5, correct: false }
+      ]
+    },
+    { text: "夜、吸殻を見つける（誰の？）", trustTarget: null,
+      choices: [
+        { text: "親に話す", effect: 2, emotion: -5, trust: 5, correct: true },
+        { text: "黙っておく", effect: -1, emotion: 5, trust: -2, correct: false }
+      ]
+    },
+    { text: "休日、友達が『遊びに来いよ』と言って喫煙の場に誘う", trustTarget: "friend",
+      choices: [
+        { text: "断る", effect: 2, emotion: 0, trust: -3, correct: true },
+        { text: "行ってしまう", effect: -3, emotion: 15, trust: 6, correct: false }
+      ]
+    },
+    { text: "最終日：これまでの行動を振り返る", trustTarget: null,
+      choices: [
+        { text: "喫煙しない決心をする", effect: 3, emotion: -5, trust: 0, correct: true },
+        { text: "まだ試してみたい気持ちがある", effect: -2, emotion: 10, trust: -2, correct: false }
+      ]
+    }
+  ],
+
+  park: [
+    { text: "🌳 公園で友達が『一服しようぜ』と言う", trustTarget: "friend",
+      choices: [
+        { text: "断る", effect: 2, emotion: -5, trust: -3, correct: true },
+        { text: "一緒に吸う", effect: -2, emotion: 15, trust: 6, correct: false }
+      ]
+    },
+    { text: "ベンチで見知らぬ大人が近づいてくる", trustTarget: "society",
+      choices: [
+        { text: "離れる", effect: 2, emotion: 5, trust: 0, correct: true },
+        { text: "話を聞く", effect: -3, emotion: 10, trust: -5, correct: false }
+      ]
+    },
+    { text: "友達の一人がタバコを吸い始める", trustTarget: "friend",
+      choices: [
+        { text: "注意する", effect: 1, emotion: -5, trust: 4, correct: true },
+        { text: "自分も吸ってみる", effect: -2, emotion: 12, trust: 3, correct: false }
+      ]
+    },
+    { text: "スポーツ帰りに先輩とすれ違う", trustTarget: "senpai",
+      choices: [
+        { text: "挨拶して立ち去る", effect: 1, emotion: 0, trust: 0, correct: true },
+        { text: "先輩の誘いに乗る", effect: -2, emotion: 15, trust: 5, correct: false }
+      ]
+    },
+    { text: "噴水付近でグループが喫煙している", trustTarget: "society",
+      choices: [
+        { text: "遠くから見る", effect: 1, emotion: 0, trust: 0, correct: true },
+        { text: "輪に入る", effect: -3, emotion: 15, trust: -4, correct: false }
+      ]
+    },
+    { text: "友達のSNSで喫煙を褒める投稿を見つける", trustTarget: "friend",
+      choices: [
+        { text: "何も言わない", effect: 1, emotion: 0, trust: 2, correct: true },
+        { text: "羨ましがるコメントをする", effect: -1, emotion: 5, trust: -2, correct: false }
+      ]
+    },
+    { text: "夜の公園で再び誘われる", trustTarget: "friend",
+      choices: [
+        { text: "断る", effect: 2, emotion: -5, trust: -3, correct: true },
+        { text: "一緒に吸う", effect: -2, emotion: 15, trust: 6, correct: false }
+      ]
+    },
+    { text: "近くで未成年に売ろうとする人を見かける", trustTarget: "society",
+      choices: [
+        { text: "知らせる", effect: 2, emotion: -5, trust: 5, correct: true },
+        { text: "見て見ぬふり", effect: -1, emotion: 5, trust: -3, correct: false }
+      ]
+    },
+    { text: "大会前で緊張、友達が『一本で落ち着け』と言う", trustTarget: "friend",
+      choices: [
+        { text: "深呼吸して断る", effect: 2, emotion: -5, trust: -2, correct: true },
+        { text: "言われた通りに吸う", effect: -2, emotion: 10, trust: 4, correct: false }
+      ]
+    },
+    { text: "帰り道、吸殻を見つける", trustTarget: null,
+      choices: [
+        { text: "拾う（片付け）", effect: 1, emotion: -2, trust: 2, correct: true },
+        { text: "無視する", effect: -1, emotion: 3, trust: -2, correct: false }
+      ]
+    },
+    { text: "公園で年長者が説教しているのを聞く", trustTarget: "society",
+      choices: [
+        { text: "話を聞く", effect: 1, emotion: -2, trust: 2, correct: true },
+        { text: "立ち去る", effect: 0, emotion: 0, trust: 0, correct: true }
+      ]
+    },
+    { text: "一日の終わりに決意を振り返る", trustTarget: null,
+      choices: [
+        { text: "吸わないと決める", effect: 3, emotion: -5, trust: 0, correct: true },
+        { text: "まだ試したい気持ちが残る", effect: -2, emotion: 10, trust: -2, correct: false }
+      ]
+    }
+  ],
+
+  home: [
+    { text: "🏠 家で親が喫煙しているのを見かける", trustTarget: "society",
+      choices: [
+        { text: "注意する", effect: 2, emotion: -5, trust: 8, correct: true },
+        { text: "黙って見る", effect: -1, emotion: 5, trust: -3, correct: false }
+      ]
+    },
+    { text: "兄が友達とタバコを吸っているのを見かける", trustTarget: "friend",
+      choices: [
+        { text: "止める", effect: 2, emotion: -5, trust: 3, correct: true },
+        { text: "興味を示す", effect: -2, emotion: 10, trust: 5, correct: false }
+      ]
+    },
+    { text: "リビングで友達が来てタバコを出す", trustTarget: "friend",
+      choices: [
+        { text: "断る", effect: 2, emotion: -5, trust: -2, correct: true },
+        { text: "少しだけ試す", effect: -2, emotion: 10, trust: 4, correct: false }
+      ]
+    },
+    { text: "スマホで喫煙動画を見てしまう", trustTarget: null,
+      choices: [
+        { text: "ブロックして我慢する", effect: 2, emotion: -3, trust: 0, correct: true },
+        { text: "真似して試してみる", effect: -2, emotion: 12, trust: -2, correct: false }
+      ]
+    },
+    { text: "近所で喫煙者を見かける", trustTarget: "society",
+      choices: [
+        { text: "注意しない", effect: 0, emotion: 0, trust: 0, correct: true },
+        { text: "注意する", effect: 1, emotion: -3, trust: 2, correct: true }
+      ]
+    },
+    { text: "家族の飲み会でタバコが出る", trustTarget: "society",
+      choices: [
+        { text: "断る", effect: 2, emotion: -5, trust: 2, correct: true },
+        { text: "付き合ってしまう", effect: -2, emotion: 10, trust: -3, correct: false }
+      ]
+    },
+    { text: "友達から夜に誘いのLINEが来る", trustTarget: "friend",
+      choices: [
+        { text: "断る", effect: 2, emotion: -3, trust: -2, correct: true },
+        { text: "行ってしまう", effect: -2, emotion: 12, trust: 5, correct: false }
+      ]
+    },
+    { text: "自室で孤独感を感じる", trustTarget: null,
+      choices: [
+        { text: "電話で相談する", effect: 1, emotion: -5, trust: 0, correct: true },
+        { text: "気晴らしに試す", effect: -2, emotion: 12, trust: -1, correct: false }
+      ]
+    },
+    { text: "兄が煙草を外で捨てるのを見かける", trustTarget: null,
+      choices: [
+        { text: "注意する", effect: 1, emotion: -3, trust: 2, correct: true },
+        { text: "黙っておく", effect: -1, emotion: 4, trust: -2, correct: false }
+      ]
+    },
+    { text: "親が喫煙の健康被害について話す場面を見る", trustTarget: "society",
+      choices: [
+        { text: "話を聞く", effect: 2, emotion: -3, trust: 2, correct: true },
+        { text: "聞き流す", effect: 0, emotion: 0, trust: -1, correct: false }
+      ]
+    },
+    { text: "深夜、誘惑にかられる場面", trustTarget: null,
+      choices: [
+        { text: "我慢する", effect: 2, emotion: -5, trust: 0, correct: true },
+        { text: "試す", effect: -2, emotion: 12, trust: -2, correct: false }
+      ]
+    },
+    { text: "一日の終わりに決意を振り返る", trustTarget: null,
+      choices: [
+        { text: "吸わない選択を続ける", effect: 3, emotion: -5, trust: 0, correct: true },
+        { text: "まだ迷っている", effect: -2, emotion: 10, trust: -2, correct: false }
+      ]
+    }
+  ],
+
+  store: [
+    { text: "🏪 コンビニ前で大人に『1本どうだ？』と声をかけられる", trustTarget: "society",
+      choices: [
+        { text: "無視して通る", effect: 2, emotion: 5, trust: 0, correct: true },
+        { text: "話を聞いてみる", effect: -3, emotion: 12, trust: -5, correct: false }
+      ]
+    },
+    { text: "友達が店でタバコを出して誘う", trustTarget: "friend",
+      choices: [
+        { text: "断る", effect: 2, emotion: -3, trust: -2, correct: true },
+        { text: "一緒に買ってみる", effect: -2, emotion: 12, trust: 5, correct: false }
+      ]
+    },
+    { text: "レジで未成年だと気づかれそうになる", trustTarget: null,
+      choices: [
+        { text: "潔く断る", effect: 2, emotion: -5, trust: 0, correct: true },
+        { text: "ごまかす", effect: -1, emotion: 5, trust: -3, correct: false }
+      ]
+    },
+    { text: "店先で友達が吸い始める", trustTarget: "friend",
+      choices: [
+        { text: "注意する", effect: 1, emotion: -3, trust: 3, correct: true },
+        { text: "自分も試す", effect: -2, emotion: 12, trust: 4, correct: false }
+      ]
+    },
+    { text: "店の裏で見知らぬ人が声をかける", trustTarget: "society",
+      choices: [
+        { text: "逃げる", effect: 2, emotion: 5, trust: 0, correct: true },
+        { text: "関わってしまう", effect: -3, emotion: 15, trust: -5, correct: false }
+      ]
+    },
+    { text: "夜、友達と店前で集まる", trustTarget: "friend",
+      choices: [
+        { text: "帰る", effect: 2, emotion: -3, trust: -2, correct: true },
+        { text: "そのまま吸う", effect: -2, emotion: 12, trust: 5, correct: false }
+      ]
+    },
+    { text: "店で働く大人が『一本どうだ』と勧める", trustTarget: "society",
+      choices: [
+        { text: "きっぱり断る", effect: 2, emotion: -5, trust: 3, correct: true },
+        { text: "手を出す", effect: -3, emotion: 12, trust: -4, correct: false }
+      ]
+    },
+    { text: "友達の前で格好つける流れになる", trustTarget: "friend",
+      choices: [
+        { text: "断る", effect: 2, emotion: -3, trust: -2, correct: true },
+        { text: "真似して吸う", effect: -2, emotion: 15, trust: 6, correct: false }
+      ]
+    },
+    { text: "深夜、店前で先輩に会う", trustTarget: "senpai",
+      choices: [
+        { text: "断る", effect: 2, emotion: -3, trust: -3, correct: true },
+        { text: "先輩に合わせる", effect: -3, emotion: 15, trust: 5, correct: false }
+      ]
+    },
+    { text: "帰宅時、吸殻を見つけて嫌な気持ちになる", trustTarget: null,
+      choices: [
+        { text: "拾って捨てる", effect: 1, emotion: -2, trust: 2, correct: true },
+        { text: "無視する", effect: -1, emotion: 4, trust: -2, correct: false }
+      ]
+    },
+    { text: "友達の投稿で喫煙を勧めるコメントを見る", trustTarget: "friend",
+      choices: [
+        { text: "コメントしない", effect: 1, emotion: 0, trust: 2, correct: true },
+        { text: "興味を示すコメントをする", effect: -1, emotion: 6, trust: -2, correct: false }
+      ]
+    },
+    { text: "最終夜、今日の判断を振り返る", trustTarget: null,
+      choices: [
+        { text: "吸わないと決める", effect: 3, emotion: -5, trust: 0, correct: true },
+        { text: "まだ試してみたい", effect: -2, emotion: 10, trust: -2, correct: false }
+      ]
+    }
+  ]
+};
+
+// ---------- ゲーム処理 ----------
+function chooseRandomRoute() {
+  const keys = Object.keys(routes);
+  const pick = keys[Math.floor(Math.random()*keys.length)];
+  currentStory = routes[pick];
+  currentScene = 0;
+  log = [];
+  // reset player stats for a fresh run
+  player.score = 0;
+  player.emotion = 50;
+  player.trust.friend = 50;
+  player.trust.senpai = 50;
+  player.trust.society = 50;
+}
+
+function updateStatus() {
+  const e = clamp(player.emotion);
+  const f = clamp(player.trust.friend);
+  const s = clamp(player.trust.senpai);
+  const so = clamp(player.trust.society);
+  document.getElementById("emotion-bar").style.width = e + "%";
+  document.getElementById("emotion-bar").textContent = e;
+  document.getElementById("emotion-text").textContent = e;
+  document.getElementById("friend-bar").style.width = f + "%";
+  document.getElementById("friend-bar").textContent = f;
+  document.getElementById("friend-text").textContent = f;
+  document.getElementById("senpai-bar").style.width = s + "%";
+  document.getElementById("senpai-bar").textContent = s;
+  document.getElementById("senpai-text").textContent = s;
+  document.getElementById("society-bar").style.width = so + "%";
+  document.getElementById("society-bar").textContent = so;
+  document.getElementById("society-text").textContent = so;
+}
+
+function showScene() {
+  // safety: if no route chosen, pick one
+  if (!currentStory) chooseRandomRoute();
+
+  if (currentScene >= currentStory.length) {
+    return ending();
+  }
+
+  const scene = currentStory[currentScene];
+  const storyEl = document.getElementById("story");
+  storyEl.textContent = scene.text;
+
+  const choicesDiv = document.getElementById("choices");
+  choicesDiv.innerHTML = "";
+
+  scene.choices.forEach((choice, idx) => {
+    const btn = document.createElement("button");
+    btn.className = "choice";
+    btn.textContent = choice.text;
+    btn.addEventListener("click", () => {
+      // ログ保存
+      log.push({ text: choice.text, correct: !!choice.correct });
+      // ステータス更新
+      player.score += (choice.effect || 0);
+      player.emotion = clamp(player.emotion + (choice.emotion || 0));
+      if (scene.trustTarget && typeof choice.trust === "number") {
+        player.trust[scene.trustTarget] = clamp(player.trust[scene.trustTarget] + choice.trust);
+      }
+      // 次へ
+      currentScene++;
+      updateStatus();
+      showScene();
+    });
+    choicesDiv.appendChild(btn);
+  });
+}
+
+function ending() {
+  const storyEl = document.getElementById("story");
+  let msg = "🎬 ゲーム終了 🎬\n\n";
+
+  // 称号判定
+  const ach = [];
+  if (player.score > 4) ach.push("🌟 健康を守ったヒーロー");
+  if (player.score <= -3) ach.push("🚬 流されやすい人");
+  if (player.trust.friend < 30) ach.push("🙅 孤立した挑戦者");
+  if (player.emotion >= 80) ach.push("😓 ストレスフル");
+  if (ach.length) msg += "🏆 あなたの称号:\n" + ach.join(" / ") + "\n\n";
+
+  // 正誤カウント
+  const total = log.length;
+  const correct = log.filter(l => l.correct).length;
+  msg += `✅ 正しい判断: ${correct} / ${total}\n\n`;
+
+  if (total === 0) msg += "（選択がありませんでした）\n";
+  else if (correct === total) msg += "🌟 全て正解！健康的な選択を続けられそうです。\n";
+  else if (correct >= total/2) msg += "⚖️ 多くは正しい判断でした。良い傾向です。\n";
+  else msg += "⚠️ 誤った選択が多めです。リスクを減らす方法を考えましょう。\n";
+
+  msg += "\n📖 解説モード:\n・タバコは依存性が高く未成年で始めるとやめにくくなります。\n";
+  msg += "・断る勇気や相談する習慣が長期的に健康を守ります。\n";
+
+  storyEl.textContent = msg;
+
+  // 選択ログ表示 & リセットボタン
+  const choicesDiv = document.getElementById("choices");
+  choicesDiv.innerHTML = "<h3>📜 あなたの選択ログ</h3>";
+  const ul = document.createElement("ul");
+  ul.className = "log";
+  log.forEach(item => {
+    const li = document.createElement("li");
+    li.textContent = `${item.text} - ${item.correct ? "正しい" : "誤り"}`;
+    ul.appendChild(li);
+  });
+  choicesDiv.appendChild(ul);
+
+  const resetBtn = document.createElement("button");
+  resetBtn.className = "choice";
+  resetBtn.textContent = "🔄 もう一度遊ぶ（別ルート）";
+  resetBtn.addEventListener("click", () => {
+    chooseRandomRoute();
+    updateStatus();
+    // small delay to ensure UI updates clearly
+    setTimeout(() => { showScene(); }, 80);
+  });
+  choicesDiv.appendChild(resetBtn);
+}
+
+// 初期化実行
+chooseRandomRoute();
+updateStatus();
+showScene();
+
+</script>
+</body>
+</html>
